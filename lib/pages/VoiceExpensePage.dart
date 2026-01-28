@@ -24,21 +24,54 @@ class _VoiceExpensePageState extends State<VoiceExpensePage> {
     await _speech.initialize();
   }
 
-  void _startListening() async {
+  Future<void> _startListening() async {
     setState(() => _listening = true);
-
     await _speech.listen(
       listenMode: stt.ListenMode.dictation,
       partialResults: true,
-      onResult: (res) {
-        setState(() => _text = res.recognizedWords);
-      },
+      onResult: (res) => setState(() => _text = res.recognizedWords),
     );
   }
 
-  void _stopListening() async {
+  Future<void> _stopListening() async {
     await _speech.stop();
     setState(() => _listening = false);
+  }
+
+  Future<void> _cancelListening() async {
+    await _speech.cancel();
+    setState(() => _listening = false);
+  }
+
+  /// Intercepts the back navigation (system/AppBar/iOS swipe).
+  /// If recording, stop first. Optionally confirm.
+  Future<bool> _handleWillPop() async {
+    if (_listening) {
+      // Optional: show confirmation while recording.
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Stop recording?'),
+          content: const Text(
+              'You are currently recording. Do you want to stop and go back?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Stay')),
+            ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Stop & Back')),
+          ],
+        ),
+      );
+
+      if (confirm == true) {
+        await _stopListening(); // or _cancelListening();
+        return true; // Allow the pop
+      }
+      return false; // Block the pop
+    }
+    return true; // Not listening → allow pop
   }
 
   // ----------------------------------------------------
@@ -347,12 +380,16 @@ class _VoiceExpensePageState extends State<VoiceExpensePage> {
 
     try {
       final response = await http.post(
-        Uri.parse("https://beatporttopcharts.com/php/api/expense/save_expense.php"),
+        Uri.parse(
+            "https://beatporttopcharts.com/php/api/expense/save_expense.php"),
         body: {"amount": amount.toString(), "category": category},
       );
 
       if (response.statusCode == 200) {
         _show("Saved: £$amount ($category)");
+        if (context.mounted) {
+          Navigator.pop(context, true); // signal dashboard to refresh
+        }
       } else {
         _show("Error saving data (${response.statusCode}).");
       }
@@ -369,34 +406,56 @@ class _VoiceExpensePageState extends State<VoiceExpensePage> {
   }
 
   @override
+  void dispose() {
+    // Ensure the recognizer is stopped/cancelled when the page is disposed.
+    _speech.cancel(); // or _speech.stop();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Voice Expense Logger")),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Text(_text, style: const TextStyle(fontSize: 18)),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                ElevatedButton(
-                  onPressed: _listening ? null : _startListening,
-                  child: const Text("Start"),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: !_listening ? null : _stopListening,
-                  child: const Text("Stop"),
-                ),
-                const SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: _processAndSend,
-                  child: const Text("Save"),
-                )
-              ],
-            ),
-          ],
+    return WillPopScope(
+      onWillPop: _handleWillPop,
+      child: Scaffold(
+        // appBar: AppBar(title: const Text("Voice Expense Logger")),
+        appBar: AppBar(
+          title: const Text('Add Expense (Voice)'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              final allow = await _handleWillPop();
+              if (allow && context.mounted) {
+                Navigator.pop(context);
+              }
+            },
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Text(_text, style: const TextStyle(fontSize: 18)),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  ElevatedButton(
+                    onPressed: _listening ? null : _startListening,
+                    child: const Text("Start"),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    onPressed: !_listening ? null : _stopListening,
+                    child: const Text("Stop"),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    onPressed: _processAndSend,
+                    child: const Text("Save"),
+                  )
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
